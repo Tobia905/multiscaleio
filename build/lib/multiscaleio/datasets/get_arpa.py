@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Union
+from typing import Union, Optional
 from multiscaleio.datasets.arpa.config_arpa import ArpaConfig
 from multiscaleio.datasets.arpa.arpa_downloader import parallel_download
 import pandas as pd
@@ -20,28 +20,26 @@ def get_arpa(
     n_jobs: int = 1,
     **kwargs
 ) -> pd.DataFrame:
-    """
-    Downloads, parses and concats all ARPA data for the
-    selected years.
+    """Downloads, parses and concats all ARPA data for the
+       selected years.
 
-    args:
-        years (str, list): years to download.
-        measure (str): "air" or "meteo" - kind of ARPA data to obtain.
-        pre_dispatch (str, int, float): dispatching strategy for Parallel.
-        aggfunc (str): aggregation function for download_and_parse.
-        n_jobs (int): cores to use for Parallel.
+       args:
+           years (str, list): years to download.
+           kind (str): "air" or "meteo" - kind of ARPA data to obtain.
+           pre_dispatch (str, int, float): dispatching strategy for Parallel.
+           aggfunc (str): aggregation function for download_and_parse.
+           subset (str): must be a boolean query for df.query.
+           n_jobs (int): cores to use for Parallel.
 
-    returns:
-        arpa (pd.DataFrame): final dataframe.
+       returns:
+           pd.DataFrame: final dataframe.
     """
-    # an error is raised if measure is not valid
     if measure not in ["air", "meteo"]:
         raise ValueError(
             f"{measure} measure is invalid. Please select "
              "from ('air', 'meteo')."
         )
 
-    # get years from confing
     years = (
         list(DICT_CONF[measure].keys()) if years == "all" else years
     )
@@ -54,16 +52,15 @@ def get_arpa(
     )
     logger.info(f"Retrieving arpa {measure} data {period}")
 
-    links = [DICT_CONF[measure][year] for year in years]
-    meta = pd.read_csv(DICT_CONF["metadata"][measure])
-    arpa = pd.concat(
-        parallel_download(
-            meta, data_url = links, pre_dispatch=pre_dispatch, 
-            n_jobs=n_jobs, aggfunc=aggfunc, **kwargs
-        )
-    )
-    arpa = (
-        arpa.drop(['lng', 'lat'], axis=1) if measure == "meteo" else arpa
-    )
+    # links = [AIR_MET[measure]["data"][year] for year in years]
+    # meta = pd.read_csv(AIR_MET[measure]["meta"])
+    # air = parallel_download(
+    #     links, meta, pre_dispatch=pre_dispatch, 
+    #     n_jobs=n_jobs, aggfunc=aggfunc, **kwargs
+    # )
+    # total = pd.concat(air).reset_index(drop=True)
 
-    return arpa.reset_index(drop=True)
+    # if measure == "meteo":
+    #     total = total.drop(['lng', 'lat'], axis=1)
+
+    return #total

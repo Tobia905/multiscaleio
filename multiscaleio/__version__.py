@@ -1,0 +1,6 @@
+__title__ = "multiscaleio"
+__description__ = "Package for multi-scale machine learning modeling on multivariate time series data."
+__url__ = "https://github.com/Tobia905/multiscaleio"
+__version__ = "0.0.1"
+__author__ = "Tobia Tommasini"
+__author_email__ = "tobiatommasini@gmail.com"
