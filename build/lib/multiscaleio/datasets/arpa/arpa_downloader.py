@@ -204,7 +204,7 @@ def parallel_download(
     else: 
         out = [
             preprocess_arpa(
-                url, meta, aggfunc=aggfunc, **kwargs
+                meta, data_url=url, aggfunc=aggfunc, **kwargs
             )
             for url in data_url
         ]

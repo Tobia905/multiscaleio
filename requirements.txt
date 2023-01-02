@@ -6,3 +6,4 @@ matplotlib==3.6.2
 fitter==1.2.3
 imbalanced-learn==0.10.1
 prophet==1.1.1
+tslearn==0.5.2
