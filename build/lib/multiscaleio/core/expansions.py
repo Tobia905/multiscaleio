@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 from sklearn.base import BaseEstimator, TransformerMixin
-from prophet import Prophet
-from sklearn.preprocessing import StandardScaler
-from sklearn.utils.validation import check_is_fitted
-from sklearn.exceptions import NotFittedError
-from tslearn.metrics import dtw
-from imblearn.pipeline import Pipeline
 from typing import Union, Callable, Optional, Iterable
+from multiscaleio.core.time_utils import rolling, get_window_functions
 from multiscaleio.common.validate import (
     check_array, 
     check_array_shape,
@@ -16,9 +11,9 @@ from multiscaleio.common.validate import (
     check_date_col_in_features,
     DataType
 )
+from functools import partial
 import numpy as np
 import pandas as pd
-import logging
 
 
 class ReshiftedExpansion(BaseEstimator, TransformerMixin):
@@ -142,9 +137,13 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
             self.feature_names_out_ = []
             X = check_array(X)
             if self.date_col:
-                X, date = separete_date_col(X, self.feature_names_in_, self.date_col)
+                X, date = separete_date_col(
+                    X, self.feature_names_in_, self.date_col
+                )
 
-            feats_to_look = check_date_col_in_features(self.feature_names_in_, self.date_col)
+            feats_to_look = check_date_col_in_features(
+                self.feature_names_in_, self.date_col
+            )
             X = check_array_shape(X)
             for wind in self._shift_range:
                 X_shifted = self._shift_or_diff(X, order=wind)
@@ -154,8 +153,6 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
                         [col + f'_shift_{wind}' for col in feats_to_look]
                     )
                 shifts.append(X_shifted)
-            if self.date_col:
-                self.feature_names_out_ = [[self.date_col]] + self.feature_names_out_
 
             self.feature_names_out_ = np.concatenate(self.feature_names_out_)
             shifts = (
@@ -163,7 +160,7 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
                 if not isinstance(self._shift_range, list) and self.window > 1
                 else shifts 
             )
-            shifts = np.concatenate(shifts, axis = 1)
+            shifts = np.concatenate(shifts, axis=1)
             if self.keep_t0:
                 # data and feature names need to be concatenated
                 # with original ones.
@@ -172,7 +169,7 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
                     if self.window > 0 or isinstance(self._shift_range, list) 
                     else (shifts, X)
                 )
-                shifts = np.concatenate(to_concat, axis = 1)
+                shifts = np.concatenate(to_concat, axis=1)
                 concat_names = (
                     (feats_to_look, self.feature_names_out_)
                     if self.window > 0 or isinstance(self._shift_range, list)
@@ -187,6 +184,7 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
             )
             if self.date_col:
                 shifts = np.insert(shifts, 0, date, axis=1)
+                self.feature_names_out_ = np.insert(self.feature_names_out_, 0, self.date_col)
 
         return (
             pd.DataFrame(shifts, columns=self.feature_names_out_)
@@ -222,29 +220,81 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
 
     def __init__(
         self, 
-        scale: Iterable[int] = [3, 7, 10],
-        window_function: Union[str, list[str or Callable], Callable] = "mean",
+        *window_args,
+        scale: Union[int, Iterable[int]] = [3, 7, 10],
+        window_function: Union[str, Callable] = "mean",
         date_col: Union[bool, str, int] = False,
         feature_names_in : Optional[Iterable[str or int]] = None,
-        output_as_df: bool = False
+        output_as_df: bool = False,
+        mean_window_type: str = "ones"
     ):
-        self.scale = scale
-        self.window_function = (
-            [window_function] 
-            if not isinstance(window_function, list)
-            else window_function
+        self.scales = (
+            [scale] 
+            if not isinstance(scale, list)
+            else scale
         )
+        self.window_function = window_function
         self.date_col = date_col
         self.feature_names_in_ = feature_names_in
         self.feature_names_out_ = None
         self.output_as_df = output_as_df
+        self.window_args = window_args
+        self.mean_window_type = mean_window_type
+        self.win_func_name = (
+            window_function 
+            if window_function in get_window_functions("all").keys()
+            else window_function.__name__
+        )
 
-    def fit(self, X: DataType, y: DataType):
+    def fit(self, X: DataType, y: Optional[DataType] = None):
         return self
 
-    def transform(self, X: DataType, y: Optional[DataType] = None) -> Union[np.ndarray, pd.DataFrame]:
+    def transform(
+        self, 
+        X: DataType, 
+        y: Optional[DataType] = None
+    ) -> Union[np.ndarray, pd.DataFrame]:
 
-        return
+        self.feature_names_in_ = check_feature_names(X, self.feature_names_in_)
+        transforms = []
+        self.feature_names_out_ = []
+
+        X = check_array(X)
+        if self.date_col:
+            X, date = separete_date_col(
+                X, self.feature_names_in_, self.date_col
+            )
+
+        feats_to_look = check_date_col_in_features(
+            self.feature_names_in_, self.date_col
+        )
+
+        for scale in self.scales:
+            X_ = X.copy()
+            win_func = partial(
+                rolling, 
+                *self.window_args, 
+                window=scale, 
+                func=self.window_function,
+                win_type=self.mean_window_type
+            )
+            X_ = np.apply_along_axis(win_func, 0, X_)
+            self.feature_names_out_.append(
+                [col+f"_{self.win_func_name}_{scale}" for col in feats_to_look]
+            )
+            transforms.append(X_)
+
+        final = np.concatenate(transforms, axis=1, dtype=object)
+        self.feature_names_out_ = np.concatenate(self.feature_names_out_)
+
+        if self.date_col:
+            final = np.insert(final, 0, date, axis=1)
+            self.feature_names_out_ = np.insert(self.feature_names_out_, 0, self.date_col)
+
+        return (
+            pd.DataFrame(final, columns=self.feature_names_out_)
+            if self.output_as_df else final
+        )
 
     def get_feature_names_in(self) -> list[Union[int, str]]:
         return self.feature_names_in_.tolist()

@@ -16,6 +16,15 @@ def check_array(array: DataType) -> np.ndarray:
     )
 
 
+def check_pandas_nan(series: Iterable) -> np.array:
+    
+    series = (
+        series.fillna(np.nan) 
+        if isinstance(series, pd.Series) else series
+    )
+    return np.array(series, dtype=float)
+
+
 def get_feature_names_in(array: DataType) -> np.ndarray:
     return (
         array.columns.values 
@@ -60,6 +69,7 @@ def check_index(df: pd.DataFrame):
 def check_feature_names(
     array: DataType, feature_names: Optional[Iterable[str or int]] = None
 ) -> np.array:
+
     return (
         get_feature_names_in(array) 
         if feature_names is None else np.array(feature_names)
@@ -69,10 +79,12 @@ def check_feature_names(
 def separete_date_col(
     array: DataType, feature_names: Iterable, date_col: str
 ) -> tuple[np.ndarray, np.ndarray]:
+
     array = check_array(array)
     date_idx = check_date_col(feature_names, date_col)
     date = array[:, date_idx]
     X = np.delete(array, date_idx, axis=1)
+
     return X, date
 
 

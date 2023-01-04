@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from multiscaleio.common.validate import DataType, check_index
-from typing import Union, Optional
+from multiscaleio.common.validate import DataType, check_index, check_pandas_nan
+from typing import Union, Optional, Callable
 from math import floor, modf
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy import signal
+import logging
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
+logger.setLevel(level=logging.INFO)
 
 
 def insert_nan_into_window(array: DataType, window_size: int) -> np.ndarray:
@@ -97,6 +101,17 @@ def bootstrapped_interval(
 
 
 def moving_average(array: DataType, window: np.ndarray) -> np.ndarray:
+    """
+    Full numpy version of moving average. The function
+    is thought to be used inside the 'rolling' function.
+
+    args:
+        array (DataType): input data.
+        window (np.ndarray): window array.
+
+    returns:
+        np.ndarray: output data.
+    """
     ma = np.divide(
         np.convolve(array, window, "valid"), len(window)
     )
@@ -105,23 +120,94 @@ def moving_average(array: DataType, window: np.ndarray) -> np.ndarray:
 
 
 def moving_median(array: DataType, window: int) -> np.ndarray:
+    """
+    Full numpy version of moving median. The function
+    is thought to be used inside the 'rolling' function.
+
+    args:
+        array (DataType): input data.
+        window (int): window size.
+
+    returns:
+        np.ndarray: output data.
+    """
     ms = np.median(
         sliding_window_view(array, window), axis=-1
     )
     return insert_nan_into_window(ms, window)
 
 
+def moving_std(array, window: int) -> np.ndarray:
+    """
+    Full numpy version of moving standard deviation. 
+    The function is thought to be used inside the 
+    'rolling' function.
+
+    args:
+        array (DataType): input data.
+        window (int): window size.
+
+    returns:
+        np.ndarray: output data.
+    """
+    # this is needed since numpy doesn't recognise some
+    # nans in pandas Serieses.
+    array = check_pandas_nan(array)
+    ms = np.nanstd(
+        sliding_window_view(array, window), axis=-1
+    )
+    return insert_nan_into_window(ms, window)
+
+
+def get_window_functions(func: str = "mean"):
+    """
+    Helper function to get pre-defined window
+    functions.
+
+    args:
+        func (str): key of the function.
+
+    returns:
+        (Callable, dict): selected function or all 
+        ones if func is 'all'.
+    """
+    rollfuncs = {
+        "mean"  : moving_average, 
+        "median": moving_median,
+        "std"   : moving_std
+    }
+    return (
+        rollfuncs[func] if func != "all" else rollfuncs
+    )
+
+
 def rolling(
     array: DataType, 
     *win_args, 
     window: int = 7, 
-    func: str = "mean", 
+    func: Union[str, Callable] = "mean", 
     win_type: str = "ones"
 ) -> np.ndarray:
+    """
+    Handler of pre-defined (or custom-made) window
+    functions.
 
-    rf = {
-        "mean": moving_average, "median": moving_median
-    }
+    args:
+        win_args: arguments for scipy.signal.get_window
+        window (int): size of the window.
+        func (str, Callable): the function to apply.
+        win_type (str): the window type for moving_average. 
+
+    returns:
+        (np.ndarray): output data.
+    """
+    allfunctions = get_window_functions("all").keys()
+    if func not in allfunctions:
+        logger.info(
+            f"{func} is not a valid pre-defined rolling "
+            "function. If this is intended, just ignore this "
+            f"message. Otherwise, select from {allfunctions}"
+        )
     if func == "mean":
         window = (
             np.ones(window) 
@@ -131,4 +217,7 @@ def rolling(
     else:
         window = window
 
-    return rf[func](array, window)
+    return (
+        get_window_functions(func)(array, window) 
+        if func in allfunctions else func(array, window)
+    )

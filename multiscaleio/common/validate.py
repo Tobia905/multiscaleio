@@ -16,6 +16,15 @@ def check_array(array: DataType) -> np.ndarray:
     )
 
 
+def check_pandas_nan(series: Iterable) -> np.array:
+    
+    series = (
+        series.fillna(np.nan) 
+        if isinstance(series, pd.Series) else series
+    )
+    return np.array(series, dtype=float)
+
+
 def get_feature_names_in(array: DataType) -> np.ndarray:
     return (
         array.columns.values 
