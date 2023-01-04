@@ -333,11 +333,12 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
             )
             transforms.append(X_)
 
-        # dtype must be casted as object to include the date column
-        final = np.concatenate(transforms, axis=1, dtype=object)
+        final = np.concatenate(transforms, axis=1)
         self.feature_names_out_ = np.concatenate(self.feature_names_out_)
 
         if self.date_col:
+            # dtype must be casted as object to include the date column
+            final = np.array(final, dtype=object)
             final = np.insert(final, 0, date, axis=1)
             self.feature_names_out_ = np.insert(self.feature_names_out_, 0, self.date_col)
 

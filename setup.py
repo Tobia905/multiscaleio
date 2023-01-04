@@ -32,6 +32,7 @@ if __name__ == "__main__":
         version=infos["__version__"],
         url=infos["__url__"],
         author=infos["__author__"],
+        license="Apache 2.0",
         long_description=readme,
         long_description_content_type="text/markdown",
         author_email=infos["__author_email__"],
