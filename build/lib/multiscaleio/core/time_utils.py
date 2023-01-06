@@ -160,6 +160,17 @@ def moving_std(array, window: int) -> np.ndarray:
 
 
 def get_window_functions(func: str = "mean"):
+    """
+    Helper function to get pre-defined window
+    functions.
+
+    args:
+        func (str): key of the function.
+
+    returns:
+        (Callable, dict): selected function or all 
+        ones if func is 'all'.
+    """
     rollfuncs = {
         "mean"  : moving_average, 
         "median": moving_median,
@@ -177,7 +188,19 @@ def rolling(
     func: Union[str, Callable] = "mean", 
     win_type: str = "ones"
 ) -> np.ndarray:
+    """
+    Handler of pre-defined (or custom-made) window
+    functions.
 
+    args:
+        win_args: arguments for scipy.signal.get_window
+        window (int): size of the window.
+        func (str, Callable): the function to apply.
+        win_type (str): the window type for moving_average. 
+
+    returns:
+        (np.ndarray): output data.
+    """
     allfunctions = get_window_functions("all").keys()
     if func not in allfunctions:
         logger.info(

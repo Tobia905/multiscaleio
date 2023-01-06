@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from multiscaleio.common.validate import DataType, check_index, check_pandas_nan
+from multiscaleio.common.validate import (
+    DataType, 
+    check_index, 
+    check_pandas_nan, 
+    check_array
+)
 from typing import Union, Optional, Callable
 from math import floor, modf
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy import signal
+from sklearn.linear_model import LinearRegression
+from statsmodels.stats.diagnostic import het_breuschpagan
 import logging
 import pandas as pd
 import numpy as np
@@ -221,3 +228,40 @@ def rolling(
         get_window_functions(func)(array, window) 
         if func in allfunctions else func(array, window)
     )
+
+
+def ts_hsched_test(array: DataType, **kwargs):
+    """
+    Performs the Breusch-Pagan homoschedasticity
+    test in a time series fashion.
+
+    args:
+        array (DataType): input data.
+        **kwargs: keyword arguments for het_breuschpagan.
+
+    returns:
+        tuple: BP test results.
+    """
+    array = check_array(array)
+    array = np.nan_to_num(array, np.mean(array))
+    array = array[:, None] if len(array.shape) == 1 else array
+    # concatenate output data with an array
+    # representing timestamps
+    array = np.concatenate(
+        (np.arange(len(array)).reshape(-1, 1), array), axis=1
+    )
+    # obtaining OLS residuals
+    lr = LinearRegression()
+    X, y = array[:, 0].reshape(-1, 1), array[:, 1]
+    _ = lr.fit(X, y)
+    fitted = lr.predict(X)
+    residuals = array[:, 1] - fitted
+    # bp test requires a 2-dim array for input data
+    bp_data = np.concatenate(
+        (
+            (np.repeat(1, len(array))[:, None]), 
+            array[:, 1][:, None]
+        ),
+        axis=1
+    )
+    return het_breuschpagan(residuals, bp_data, **kwargs)

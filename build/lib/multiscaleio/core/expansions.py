@@ -136,6 +136,10 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
             shifts = []
             self.feature_names_out_ = []
             X = check_array(X)
+            # if date_col is not False, we need to separate
+            # it from the data to perform the calculations.
+            # date_col will be re-inserted at the end of the 
+            # process.
             if self.date_col:
                 X, date = separete_date_col(
                     X, self.feature_names_in_, self.date_col
@@ -177,6 +181,7 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
                 )
                 self.feature_names_out_ = np.append(*concat_names)
 
+            # adding differentiation if indicated in the init
             shifts = (
                 self._shift_or_diff(shifts, order=self.diff, op="diff") 
                 if self.diff > 0 
@@ -217,7 +222,32 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
 
 
 class MultiscaleExpansion(BaseEstimator, TransformerMixin):
+    """
+    Class to perform the multiscale expansion transformation.
+    For each feature in the input data, n new columns are
+    added to the data, where n = len(scale). A scale is defined
+    as the length of the window on which 'window_function' will
+    be applied.
 
+    args:
+        window_args: generical arguments for scipy.signal.get_window.
+        scale (Iterable, int): the lenght of the windows on which
+        window functions will be applied.
+        window_function (str): the window function.
+        date_col (bool, str, int): the name/index of the date 
+        column to keep.
+        features_names_in_ (Optional, Iterable): features names 
+        of input data.
+        output_as_df (bool): if True, output of transform is
+        returned as a dataframe.
+        mean_window_type (str): type of window to convolve in
+        computing the moving average.
+
+    attributes:
+        scales (list): scale turned as a list if not.
+        features_names_out_ (None): features names of output data.
+        win_func_name (str): the name of the window function.
+    """
     def __init__(
         self, 
         *window_args,
@@ -228,6 +258,7 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
         output_as_df: bool = False,
         mean_window_type: str = "ones"
     ):
+        # scale must be a list 
         self.scales = (
             [scale] 
             if not isinstance(scale, list)
@@ -240,6 +271,8 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
         self.output_as_df = output_as_df
         self.window_args = window_args
         self.mean_window_type = mean_window_type
+        # setting the name of the window function. This 
+        # will be used to store output feature names.
         self.win_func_name = (
             window_function 
             if window_function in get_window_functions("all").keys()
@@ -254,7 +287,19 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
         X: DataType, 
         y: Optional[DataType] = None
     ) -> Union[np.ndarray, pd.DataFrame]:
+        """
+        Main method to perform the expansion. For each feature 
+        in the input data, n new columns are added to the data, 
+        where n = len(scale).
 
+        args:
+            X (DataType): input data.
+            y (DataType): unused; added only for coherence
+            with sklearn.
+
+        returns:
+            final (pd.DataFrame, np.ndarray): transformed data.
+        """
         self.feature_names_in_ = check_feature_names(X, self.feature_names_in_)
         transforms = []
         self.feature_names_out_ = []
@@ -271,6 +316,8 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
 
         for scale in self.scales:
             X_ = X.copy()
+            # window function is assigned to partial
+            # to be used in apply_along_axis
             win_func = partial(
                 rolling, 
                 *self.window_args, 
@@ -279,15 +326,19 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
                 win_type=self.mean_window_type
             )
             X_ = np.apply_along_axis(win_func, 0, X_)
+            # each feature name is extended with the function
+            # name and the scale on which this is applied.
             self.feature_names_out_.append(
                 [col+f"_{self.win_func_name}_{scale}" for col in feats_to_look]
             )
             transforms.append(X_)
 
-        final = np.concatenate(transforms, axis=1, dtype=object)
+        final = np.concatenate(transforms, axis=1)
         self.feature_names_out_ = np.concatenate(self.feature_names_out_)
 
         if self.date_col:
+            # dtype must be casted as object to include the date column
+            final = np.array(final, dtype=object)
             final = np.insert(final, 0, date, axis=1)
             self.feature_names_out_ = np.insert(self.feature_names_out_, 0, self.date_col)
 
