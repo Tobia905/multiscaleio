@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from typing import Union, Callable, Optional, Iterable
-from multiscaleio.core.time_utils import rolling, get_window_functions
+from multiscaleio.core.time_utils import rolling, get_statistics
 from multiscaleio.common.validate import (
     check_array, 
     check_array_shape,
@@ -275,7 +275,7 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
         # will be used to store output feature names.
         self.win_func_name = (
             window_function 
-            if window_function in get_window_functions("all").keys()
+            if window_function in get_statistics("all").keys()
             else window_function.__name__
         )
 
@@ -323,7 +323,8 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
                 *self.window_args, 
                 window=scale, 
                 func=self.window_function,
-                win_type=self.mean_window_type
+                win_type=self.mean_window_type,
+                disp_warn=False
             )
             X_ = np.apply_along_axis(win_func, 0, X_)
             # each feature name is extended with the function
@@ -352,6 +353,3 @@ class MultiscaleExpansion(BaseEstimator, TransformerMixin):
 
     def get_feature_names_out(self) -> list[Union[int, str]]:
         return self.feature_names_out_.tolist()
-
-
-

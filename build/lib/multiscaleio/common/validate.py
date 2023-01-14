@@ -3,26 +3,51 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 import warnings
-from typing import Union, Iterable, Optional
+from typing import Union, Iterable, Optional, Any
 
 DataType = Union[pd.DataFrame, np.ndarray, pd.Series]
 
 
-def check_array(array: DataType) -> np.ndarray:
+def check_array(array: DataType, **kwargs) -> np.ndarray:
     return (
-        np.array(array) 
+        np.array(array, **kwargs) 
         if not isinstance(array, np.ndarray) 
         else array
     )
 
 
-def check_pandas_nan(series: Iterable) -> np.array:
-    
-    series = (
-        series.fillna(np.nan) 
-        if isinstance(series, pd.Series) else series
+def display_nan_warning(series: DataType):
+    name = (
+        series.name 
+        if isinstance(series, pd.Series) else "passed array"
     )
-    return np.array(series, dtype=float)
+    warnings.warn(
+        f"Quote of missing values in {name} is greater"
+         " than 35% so imputing them could lead to unexpected"
+         " future behaviours. Consider excluding it from the"
+         " analysis."
+    )
+
+
+def check_pandas_nan(series: Iterable, fill: Any = np.nan, disp_warn: bool = True) -> np.array:
+    
+    if isinstance(series, pd.Series):
+        if (
+            series.isna().sum() / (len(series)) > .35
+            and fill not in (np.nan, None)
+            and disp_warn
+        ):
+            display_nan_warning(series)
+
+        fillfuncs = {
+            "mean": series.mean(), "median": series.median()
+        }
+        fill = (
+            fillfuncs[fill] if fill in fillfuncs.keys() else fill
+        )
+        series = series.fillna(fill) 
+        
+    return check_array(series, dtype=float)
 
 
 def get_feature_names_in(array: DataType) -> np.ndarray:

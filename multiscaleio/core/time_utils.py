@@ -4,7 +4,8 @@ from multiscaleio.common.validate import (
     DataType, 
     check_index, 
     check_pandas_nan, 
-    check_array
+    check_array,
+    display_nan_warning
 )
 from typing import Union, Optional, Callable
 from math import floor, modf
@@ -12,6 +13,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from scipy import signal
 from sklearn.linear_model import LinearRegression
 from statsmodels.stats.diagnostic import het_breuschpagan
+from functools import partial
 import logging
 import pandas as pd
 import numpy as np
@@ -23,6 +25,19 @@ logger.setLevel(level=logging.INFO)
 def insert_nan_into_window(array: DataType, window_size: int) -> np.ndarray:
     return np.insert(
         array, 0, np.repeat(np.nan, window_size-1)
+    )
+
+
+def get_statistics(stat: str):
+    np_stat_funcs = {
+        "mean"  : np.nanmean,
+        "median": np.nanmedian,
+        "std"   : np.nanstd,
+        "min"   : np.nanmin,
+        "max"   : np.nanmax
+    }
+    return (
+        np_stat_funcs[stat] if stat != "all" else np_stat_funcs
     )
 
 
@@ -107,7 +122,7 @@ def bootstrapped_interval(
     )
 
 
-def moving_average(array: DataType, window: np.ndarray) -> np.ndarray:
+def moving_average(array: DataType, window: np.ndarray, **kwargs) -> np.ndarray:
     """
     Full numpy version of moving average. The function
     is thought to be used inside the 'rolling' function.
@@ -119,6 +134,7 @@ def moving_average(array: DataType, window: np.ndarray) -> np.ndarray:
     returns:
         np.ndarray: output data.
     """
+    array = check_pandas_nan(array, **kwargs)
     ma = np.divide(
         np.convolve(array, window, "valid"), len(window)
     )
@@ -126,66 +142,32 @@ def moving_average(array: DataType, window: np.ndarray) -> np.ndarray:
     return np.array(ma, dtype=float)
 
 
-def moving_median(array: DataType, window: int) -> np.ndarray:
+def base_moving_function(
+    array: DataType, 
+    window: int, 
+    func: str = "median",
+    **kwargs
+) -> np.ndarray:
     """
-    Full numpy version of moving median. The function
-    is thought to be used inside the 'rolling' function.
+    Full numpy version of moving functions. Thought to be 
+    used inside the 'rolling' function.
 
     args:
         array (DataType): input data.
         window (int): window size.
-
-    returns:
-        np.ndarray: output data.
-    """
-    ms = np.median(
-        sliding_window_view(array, window), axis=-1
-    )
-    return insert_nan_into_window(ms, window)
-
-
-def moving_std(array, window: int) -> np.ndarray:
-    """
-    Full numpy version of moving standard deviation. 
-    The function is thought to be used inside the 
-    'rolling' function.
-
-    args:
-        array (DataType): input data.
-        window (int): window size.
+        kwargs: kwargs for check_pandas_nan.
 
     returns:
         np.ndarray: output data.
     """
     # this is needed since numpy doesn't recognise some
     # nans in pandas Serieses.
-    array = check_pandas_nan(array)
-    ms = np.nanstd(
+    assert func != "all"
+    array = check_pandas_nan(array, **kwargs)
+    ms = get_statistics(func)(
         sliding_window_view(array, window), axis=-1
     )
     return insert_nan_into_window(ms, window)
-
-
-def get_window_functions(func: str = "mean"):
-    """
-    Helper function to get pre-defined window
-    functions.
-
-    args:
-        func (str): key of the function.
-
-    returns:
-        (Callable, dict): selected function or all 
-        ones if func is 'all'.
-    """
-    rollfuncs = {
-        "mean"  : moving_average, 
-        "median": moving_median,
-        "std"   : moving_std
-    }
-    return (
-        rollfuncs[func] if func != "all" else rollfuncs
-    )
 
 
 def rolling(
@@ -193,7 +175,8 @@ def rolling(
     *win_args, 
     window: int = 7, 
     func: Union[str, Callable] = "mean", 
-    win_type: str = "ones"
+    win_type: str = "ones",
+    **kwargs
 ) -> np.ndarray:
     """
     Handler of pre-defined (or custom-made) window
@@ -204,11 +187,12 @@ def rolling(
         window (int): size of the window.
         func (str, Callable): the function to apply.
         win_type (str): the window type for moving_average. 
+        kwargs: kwargs for check_pandas_nan.
 
     returns:
         (np.ndarray): output data.
     """
-    allfunctions = get_window_functions("all").keys()
+    allfunctions = get_statistics("all").keys()
     if func not in allfunctions:
         logger.info(
             f"{func} is not a valid pre-defined rolling "
@@ -221,11 +205,14 @@ def rolling(
             if win_type == "ones" 
             else signal.get_window((win_type, *win_args), window)
         )
-    else:
+        moving = moving_average
+
+    elif func != "mean" and func in allfunctions.keys():
         window = window
+        moving = partial(base_moving_function, func=func)
 
     return (
-        get_window_functions(func)(array, window) 
+        moving(array, window, **kwargs) 
         if func in allfunctions else func(array, window)
     )
 
@@ -243,7 +230,10 @@ def ts_hsched_test(array: DataType, **kwargs):
         tuple: BP test results.
     """
     array = check_array(array)
-    array = np.nan_to_num(array, np.mean(array))
+    if np.nansum(array) / len(array) > .35:
+        display_nan_warning(array)
+
+    array = np.nan_to_num(array, np.nanmedian(array))
     array = array[:, None] if len(array.shape) == 1 else array
     # concatenate output data with an array
     # representing timestamps
@@ -265,3 +255,28 @@ def ts_hsched_test(array: DataType, **kwargs):
         axis=1
     )
     return het_breuschpagan(residuals, bp_data, **kwargs)
+
+
+def auto_seasonality(array: DataType, **kwargs):
+    """
+    Extract the length of the seasonality period
+    using power spectral density, computed using 
+    the Welch's method. When applied in the Prophet
+    interpolator, the seasonality componenta
+    is automatically extracted from the trainin set 
+    (not nans). This means that, for long periods of 
+    seasonality (e.i. a year), the performances of 
+    the interpolator heavily rely on the % of not 
+    nans in the series.
+
+    args:
+        array: input data.
+        kwargs: keyword arguments for scipy welch function.
+
+    returns:
+        float: seasonality period.
+    """
+    array = check_array(array)
+    array = array[~np.isnan(array)]
+    arr_spectrum = signal.welch(array, **kwargs)
+    return 1 / arr_spectrum[0][np.argmax(arr_spectrum[1])]

@@ -5,7 +5,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from multiscaleio.common.validate import DataType, check_index
 from multiscaleio.core.sample_interval import UncertaintySampler
-from multiscaleio.core.interpolate import ts_hsched_test
+from multiscaleio.core.time_utils import ts_hsched_test, auto_seasonality
 from typing import Union, Optional
 import numpy as np
 import pandas as pd
@@ -52,6 +52,7 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         output_as_series: bool = False,
         disable_prophet_logs: bool = True,
         uncertainty_fitter_timeout: int = 30,
+        fourier_order: int = 3,
         **proph_args
     ):
         self.date_index = date_index
@@ -66,6 +67,8 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         self.original_feature_name = None
         self.disable_prophet_logs = disable_prophet_logs
         self.uncertainty_fitter_timeout = uncertainty_fitter_timeout
+        self.fourier_order = fourier_order
+        self.proph_args = proph_args
 
     def fit(self, X: DataType, y: Optional[DataType] = None):
         """
@@ -128,6 +131,14 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
             logger.propagate = False
             logger.setLevel(logging.CRITICAL)
 
+        if not self.proph_args.get("yearly_seasonality", None):
+            seas_per = auto_seasonality(
+                self.train["y"], 
+                nperseg=len(self.train["y"].dropna())
+            )
+            _ = self.prophet.add_seasonality(
+                "auto", seas_per, self.fourier_order
+            )
         _ = self.prophet.fit(self.train)
             
         self.is_fitted_ = True
@@ -156,8 +167,10 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         check_is_fitted(self)
         # adding random oscillations to interpolated values 
         # can lead to unwanted results if variance is
-        # heteroschedastic.
-        if ts_hsched_test(self.train)[1] < 0.05:
+        # heteroschedastic. More in detail, a period 
+        # associated with observed low variability can 
+        # result in a very high sampled one.
+        if ts_hsched_test(self.train["y"])[1] < 0.05:
             warnings.warn(
                 f"{self.original_feature_name} has "
                  "heteroschedastic variance, so adding "
@@ -166,17 +179,17 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
                  "add_sample_uncertainty to False."
             )
         fitted = self.prophet.predict(self.train)
-        err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
+        self.err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
         # the best fitting real line supported distribution
         # is fitted on the errors between Prophet predictions
         # and real values.
-        fs = UncertaintySampler(
-            err.values, 
+        self.fs = UncertaintySampler(
+            self.err.values, 
             distributions=distributions, 
             fit_logs=self.uncertainty_fit_logs, 
             **kwargs
         )
-        return fs.sample(not_fitted_action="fit", size=size)
+        return self.fs.sample(not_fitted_action="fit", size=size)
 
     def transform(
         self, 
