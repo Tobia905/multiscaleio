@@ -116,7 +116,7 @@ class ReshiftedExpansion(BaseEstimator, TransformerMixin):
         Peforms the shifting expansion: for each feature, a new 
         column representing it's shifted (past or future) version
         is added to data. If 'keep_t0' is True, original features
-        are keeped in the output data, while 'date_col' represents
+        are kept in the output data, while 'date_col' represents
         the column indicating the date.
 
         args:
