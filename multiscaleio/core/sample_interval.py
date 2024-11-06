@@ -1,6 +1,7 @@
 import scipy
 import numpy as np
 import logging
+import ast
 from fitter import Fitter
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
@@ -97,4 +98,4 @@ class UncertaintySampler(Fitter):
 
         best_dist = list(self.get_best().keys())[0]
         params = self.fitted_param[best_dist]
-        return eval("scipy.stats."+best_dist+".rvs")(*params, size=size)
+        return ast.literal_eval("scipy.stats."+best_dist+".rvs")(*params, size=size)

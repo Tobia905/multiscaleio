@@ -8,3 +8,4 @@ imbalanced-learn==0.10.1
 prophet==1.1.1
 tslearn==0.5.2
 statsmodels==0.13.5
+arch==7.2.0

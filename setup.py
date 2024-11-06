@@ -1,5 +1,7 @@
 from setuptools import find_packages, setup
 from codecs import open
+from typing import List
+import re
 import os
 
 curfile = os.path.abspath(os.path.dirname(__file__))
@@ -10,18 +12,24 @@ vpath = os.path.join(curfile, PNAME, "__version__.py")
 with open("README.md", "r", "utf-8") as rm:
     readme = rm.read()
 
-def get_requirements(path, version: bool = False):
+def get_requirements(path: str, version: bool = False) -> List[str]:
+    requirements = []
     with open(path) as req:
-        requirements = []
         for line in req:
-            requirements.append(line.replace("\n", ""))
+            line = re.sub(r"ÿþ|\x00", "", line).replace("\n", "")
+            line = os.path.expandvars(line)
+            requirements.append(line)
 
     if version:
         requirements = {
             info.split(" = ")[0]: info.split(" = ")[1].replace('"', '') 
             for info in requirements
         }
-    return requirements
+
+        return requirements
+
+    else:
+        return list(filter(len, requirements))
 
 infos = get_requirements(vpath, version=True)
 

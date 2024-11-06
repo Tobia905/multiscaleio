@@ -7,12 +7,14 @@ from multiscaleio.common.validate import (
     check_array,
     display_nan_warning
 )
-from typing import Union, Optional, Callable
+from typing import Union, Optional, Callable, Dict
 from math import floor, modf
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy import signal
+from scipy.signal import detrend
 from sklearn.linear_model import LinearRegression
 from statsmodels.stats.diagnostic import het_breuschpagan
+from statsmodels.tsa.stattools import adfuller, pacf
 from functools import partial
 import logging
 import pandas as pd
@@ -188,7 +190,7 @@ def rolling(
         func (str, Callable): the function to apply.
         win_type (str): the window type for moving_average. 
         kwargs: kwargs for check_pandas_nan.
-
+ 
     returns:
         (np.ndarray): output data.
     """
@@ -217,7 +219,95 @@ def rolling(
     )
 
 
-def ts_hsched_test(array: DataType, **kwargs):
+def remove_trend_from_time_series(timeseries: DataType, method: str = "diff") -> np.ndarray:
+    """
+    Remove trend from a time series.
+
+    args:
+        timeseries (array-like or pd.Series): The time series data to detrend.
+        method (str): The method to use for detrending ('difference' or 'linear').
+
+    Returns:
+        pd.Series: The detrended time series.
+    """
+    timeseries = check_array(timeseries)
+
+    if method not in ("diff", "linear"):
+        raise ValueError(
+            "Method should be either 'difference' or 'linear'"
+        )
+    
+    if method == "diff":
+        # Differencing method: subtract the previous value to remove trend
+        detrended_series = np.diff(timeseries)
+        detrended_series = detrended_series[~np.isnan(detrended_series)]
+
+    elif method == 'linear':
+        # Linear detrending: subtract a fitted trend line from the series
+        detrended_series = detrend(timeseries)
+    
+    return detrended_series
+
+
+def test_stationarity(timeseries: DataType) -> Dict[str, Union[float, int]]:
+    """
+    Perform Augmented Dickey-Fuller (ADF) test to check if the time 
+    series is stationary.
+    
+    args:
+        timeseries (array-like or pandas Series): The time series data 
+        to test.
+        significance_level (float): The significance level for the 
+        test (default is 0.05).
+    
+    Returns:
+        dict: Contains test statistics and a conclusion on stationarity.
+    """
+    # Perform ADF test
+    result = adfuller(timeseries, autolag='AIC')
+    test_statistic, p_value, used_lags, n_obs, critical_values, _ = result
+
+    # Return results in a dictionary
+    return {
+        "Test Statistic": test_statistic,
+        "p-value": p_value,
+        "Lags Used": used_lags,
+        "Number of Observations": n_obs,
+        "Critical Values": critical_values,
+    }
+
+
+def make_stationary_time_series(
+    timeseries: DataType, 
+    conf_level: float = 0.05, 
+    detrend_method: str = "diff"
+) -> np.array:
+    
+    stat_pval = test_stationarity(timeseries)["p-value"]
+    timeseries_ = timeseries.copy()
+
+    if stat_pval < conf_level:
+        if detrend_method == "diff":
+            while stat_pval < 0.05:
+                detrended = remove_trend_from_time_series(timeseries_, method=detrend_method)
+                timeseries_ = detrended
+                stat_pval = test_stationarity(timeseries)["p-value"]
+
+        else:
+            detrended = remove_trend_from_time_series(timeseries, method=detrend_method)
+
+    else:
+        detrended = timeseries
+
+    return check_array(detrended)
+
+
+def ts_hsched_test(
+    array: DataType, 
+    stat_conf_level: float = 0.05, 
+    detrend_method: str = "diff", 
+    **kwargs
+):
     """
     Performs the Breusch-Pagan homoschedasticity
     test in a time series fashion.
@@ -229,7 +319,9 @@ def ts_hsched_test(array: DataType, **kwargs):
     returns:
         tuple: BP test results.
     """
-    array = check_array(array)
+    array = make_stationary_time_series(
+        array, conf_level=stat_conf_level, detrend_method=detrend_method
+    )
     if np.nansum(array) / len(array) > .35:
         display_nan_warning(array)
 
@@ -262,8 +354,8 @@ def auto_seasonality(array: DataType, **kwargs):
     Extract the length of the seasonality period
     using power spectral density, computed using 
     the Welch's method. When applied in the Prophet
-    interpolator, the seasonality componenta
-    is automatically extracted from the trainin set 
+    interpolator, the seasonality component
+    is automatically extracted from the training set 
     (not nans). This means that, for long periods of 
     seasonality (e.i. a year), the performances of 
     the interpolator heavily rely on the % of not 
@@ -280,3 +372,19 @@ def auto_seasonality(array: DataType, **kwargs):
     array = array[~np.isnan(array)]
     arr_spectrum = signal.welch(array, **kwargs)
     return 1 / arr_spectrum[0][np.argmax(arr_spectrum[1])]
+
+
+def get_significant_number_of_lags(
+    timeseries: DataType, 
+    method: str = "ywm", 
+    nlags: int = 30,
+    threshold: int = 0.25
+) -> int:
+    # 'ywm' is a common method, but there are others like 'ols' and 'ld'
+    pacf_values = pacf(timeseries, nlags=nlags, method=method) 
+
+    # Identify lags with partial autocorrelation above threshold
+    significant_pacf_lags = [
+        lag for lag, value in enumerate(pacf_values) if value > threshold
+    ]
+    return len(significant_pacf_lags)

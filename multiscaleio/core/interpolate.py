@@ -5,8 +5,14 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 from multiscaleio.common.validate import DataType, check_index
 from multiscaleio.core.sample_interval import UncertaintySampler
-from multiscaleio.core.time_utils import ts_hsched_test, auto_seasonality
-from typing import Union, Optional
+from multiscaleio.core.time_utils import (
+    ts_hsched_test, 
+    auto_seasonality, 
+    make_stationary_time_series,
+    get_significant_number_of_lags
+)
+from typing import Union, Optional, Any
+from arch import arch_model
 import numpy as np
 import pandas as pd
 import logging
@@ -49,12 +55,19 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         date_index: Union[str, int] = 0,
         add_sampled_uncertainty: bool = False,
         uncertainty_fit_logs: bool = False,
+        uncertainty_sample_method: str = "garch",
+        uncertainty_scaling_factor: float = 0.50,
         output_as_series: bool = False,
         disable_prophet_logs: bool = True,
         uncertainty_fitter_timeout: int = 30,
         fourier_order: int = 3,
-        **proph_args
+        **proph_args: Any
     ):
+        if uncertainty_sample_method not in ("garch", "likelihood"):
+            raise ValueError(
+                "uncertainty_sample_method must be one of ('garch', 'likelihood')"
+            )
+        
         self.date_index = date_index
         self.add_sampled_uncertainty = add_sampled_uncertainty
         self.uncertainty_fit_logs = uncertainty_fit_logs
@@ -69,6 +82,8 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         self.uncertainty_fitter_timeout = uncertainty_fitter_timeout
         self.fourier_order = fourier_order
         self.proph_args = proph_args
+        self.uncertainty_sample_method = uncertainty_sample_method
+        self.uncertainty_scaling_factor = uncertainty_scaling_factor
 
     def fit(self, X: DataType, y: Optional[DataType] = None):
         """
@@ -99,7 +114,7 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         else:
             if X.shape[1] != 2:
                 raise ValueError(
-                    "The interpolator is tougth to be "
+                    "The interpolator is thougth to be "
                     "monovariate. Make sure that X includes "
                     "a date column and a feature one."
                 )
@@ -113,7 +128,7 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
             if isinstance(self.date_index, str):
                 raise TypeError(
                     f"{type(self.date_index)} date index type is not "
-                     "allowed for {X.columns}"
+                    f"allowed for {X.columns}"
                 )
         self.original_feature_name = [
             X[col].name for col in X.columns if col != self.date_index
@@ -144,11 +159,10 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         self.is_fitted_ = True
         return self
 
-    def sample_uncertainty(
+    def _sample_uncertainty_likelihood(
         self, 
-        distributions: str = "real_line_support", 
-        size: int = 100, 
-        **kwargs
+        size: int,
+        **kwargs: Any
     ) -> np.ndarray:
         """
         Fits a list of distributions on deviations from yhat and 
@@ -179,17 +193,53 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
                  "add_sample_uncertainty to False."
             )
         fitted = self.prophet.predict(self.train)
-        self.err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
+        err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
         # the best fitting real line supported distribution
         # is fitted on the errors between Prophet predictions
         # and real values.
-        self.fs = UncertaintySampler(
-            self.err.values, 
-            distributions=distributions, 
+        fs = UncertaintySampler(
+            err.values, 
+            distributions="real_line_support", 
             fit_logs=self.uncertainty_fit_logs, 
             **kwargs
         )
-        return self.fs.sample(not_fitted_action="fit", size=size)
+        return fs.sample(not_fitted_action="fit", size=size)
+    
+    def _sample_uncertainty_garch(
+        self, 
+        size: int, 
+        **kwargs: Any
+    ) -> np.ndarray:
+        
+        fitted = self.prophet.predict(self.train)
+        err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
+
+        err_stat = make_stationary_time_series(err)
+        lag_order = get_significant_number_of_lags(err_stat)
+        garch_model = arch_model(
+            err_stat, 
+            vol='Garch', 
+            p=lag_order, 
+            q=lag_order, 
+            dist='t',
+            **kwargs
+        )
+        garch_fit = garch_model.fit()
+
+        # Forecast future variances (conditional variances)
+        forecast_variances = (
+            garch_fit.forecast(horizon=size, verbose=False).variance.values[-1, :]
+        )
+        return np.random.normal(
+            loc=0, scale=np.sqrt(forecast_variances) * self.uncertainty_scaling_factor
+        )
+    
+    def sample_uncertainty(self, size: int, **kwargs: Any) -> np.ndarray:
+        return (
+            self._sample_uncertainty_garch(size=size, **kwargs) 
+            if self.uncertainty_sample_method == "garch" 
+            else self._sample_uncertainty_likelihood(size=size, **kwargs)
+        )
 
     def transform(
         self, 
