@@ -286,12 +286,12 @@ def make_stationary_time_series(
     stat_pval = test_stationarity(timeseries)["p-value"]
     timeseries_ = timeseries.copy()
 
-    if stat_pval < conf_level:
+    if stat_pval > conf_level:
         if detrend_method == "diff":
-            while stat_pval < 0.05:
+            while stat_pval > conf_level:
                 detrended = remove_trend_from_time_series(timeseries_, method=detrend_method)
                 timeseries_ = detrended
-                stat_pval = test_stationarity(timeseries)["p-value"]
+                stat_pval = test_stationarity(timeseries_)["p-value"]
 
         else:
             detrended = remove_trend_from_time_series(timeseries, method=detrend_method)

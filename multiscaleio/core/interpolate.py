@@ -56,7 +56,8 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         add_sampled_uncertainty: bool = False,
         uncertainty_fit_logs: bool = False,
         uncertainty_sample_method: str = "garch",
-        uncertainty_scaling_factor: float = 0.50,
+        uncertainty_scaling_factor: float = 1,
+        series_detrend_method: str = "diff",
         output_as_series: bool = False,
         disable_prophet_logs: bool = True,
         uncertainty_fitter_timeout: int = 30,
@@ -84,6 +85,7 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         self.proph_args = proph_args
         self.uncertainty_sample_method = uncertainty_sample_method
         self.uncertainty_scaling_factor = uncertainty_scaling_factor
+        self.series_detrend_method = series_detrend_method
 
     def fit(self, X: DataType, y: Optional[DataType] = None):
         """
@@ -189,8 +191,8 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
                 f"{self.original_feature_name} has "
                  "heteroschedastic variance, so adding "
                  "random uncertainty based on residual distribution "
-                 "could lead to unexpected results. Better set "
-                 "add_sample_uncertainty to False."
+                 "could lead to unexpected results. Better to use "
+                 "a Garch based uncertainty estimator."
             )
         fitted = self.prophet.predict(self.train)
         err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
@@ -210,12 +212,26 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         size: int, 
         **kwargs: Any
     ) -> np.ndarray:
-        
+        """
+        Estimates the oscillations from the interpolated
+        values using a Garch model to capture heteroschedasticity
+        and a Gaussian distribution to sample the uncertainty.
+
+        args:
+            size (int): the number of samples to draw.
+            **kwargs: generical kwargs from the arch_model function.
+
+        returns:
+            np.ndarray: the estimated oscillastions from the 
+            interpolation.
+        """
         fitted = self.prophet.predict(self.train)
         err = self.train["y"].reset_index(drop=True) - fitted["yhat"]
 
-        err_stat = make_stationary_time_series(err)
-        lag_order = get_significant_number_of_lags(err_stat)
+        err_stat = make_stationary_time_series(
+            err, detrend_method=self.series_detrend_method
+        )
+        lag_order = get_significant_number_of_lags(err)
         garch_model = arch_model(
             err_stat, 
             vol='Garch', 
@@ -228,10 +244,11 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
 
         # Forecast future variances (conditional variances)
         forecast_variances = (
-            garch_fit.forecast(horizon=size, verbose=False).variance.values[-1, :]
+            garch_fit.forecast(horizon=size).variance.values[-1, :]
         )
         return np.random.normal(
-            loc=0, scale=np.sqrt(forecast_variances) * self.uncertainty_scaling_factor
+            loc=np.mean(err_stat), 
+            scale=np.sqrt(forecast_variances) * self.uncertainty_scaling_factor
         )
     
     def sample_uncertainty(self, size: int, **kwargs: Any) -> np.ndarray:
@@ -278,7 +295,7 @@ class ProphetInterpolator(BaseEstimator, TransformerMixin):
         # if add_sampled_uncertainty is True
         if self.add_sampled_uncertainty:
             samples = self.sample_uncertainty(size=len(interp), **kwargs)
-            interp["yhat"] = interp["yhat"] + samples 
+            interp["yhat"] = interp["yhat"] + samples
 
         interp = interp[["ds", "yhat"]]
         to_conc = (
